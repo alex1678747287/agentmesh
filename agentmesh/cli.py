@@ -119,5 +119,18 @@ def init(ctx, project):
     console.print("[green]Initialized .ai/ directory[/green]")
 
 
+@main.command()
+@click.option("--dir", "-d", default=".", help="Project directory to sync")
+@click.pass_context
+def sync(ctx, dir):
+    """Sync .ai/ context to CLAUDE.md and AGENTS.md."""
+    from agentmesh.sync import sync_all
+
+    ai_dir = ctx.obj["config"]["context"]["ai_dir"]
+    project_dir = Path(dir)
+    sync_all(ai_dir=project_dir / ai_dir, project_dir=project_dir)
+    console.print(f"[green]Synced .ai/ to CLAUDE.md and AGENTS.md in {project_dir}[/green]")
+
+
 if __name__ == "__main__":
     main()
