@@ -6,6 +6,45 @@ from pathlib import Path
 
 MARKER = "<!-- agentmesh-managed -->"
 
+COLLAB_INSTRUCTIONS = """
+# AgentMesh Collaboration
+
+You are part of a multi-agent system managed by agentmesh.
+When a task is better suited for another agent, use agentmesh to dispatch it.
+
+## Available Commands
+
+```bash
+# Run a task on a specific agent
+agentmesh run --agent claude_code "implement user login"
+agentmesh run --agent codex_cli "review auth module"
+agentmesh run --agent openclaw "analyze project architecture"
+
+# Auto-route (agentmesh picks the best agent)
+agentmesh run "fix the null pointer bug"
+
+# Run a multi-step pipeline
+agentmesh pipeline pipeline.yaml
+
+# Check which agents are online
+agentmesh status
+```
+
+## When to Dispatch
+
+- You need code review -> dispatch to codex_cli
+- You need implementation -> dispatch to claude_code
+- You need analysis/planning -> dispatch to openclaw
+- Complex task needs multiple agents -> use pipeline
+
+## Shared Context
+
+All agents share context via `.ai/` directory:
+- `.ai/profile.md` - user preferences
+- `.ai/rules.md` - coding rules
+- `.ai/projects/{name}.md` - project-specific context
+""".strip()
+
 
 def sync_all(ai_dir: str | Path = ".ai", project_dir: str | Path = "."):
     """Sync .ai/ content to CLAUDE.md and AGENTS.md."""
@@ -64,6 +103,9 @@ def _build_include_block(ai_dir: Path) -> str:
     rules = ai_dir / "rules.md"
     if rules.exists():
         parts.append(rules.read_text("utf-8").strip())
+
+    # Add collaboration instructions
+    parts.append(COLLAB_INSTRUCTIONS)
 
     parts.append(MARKER)
     return "\n\n".join(parts)

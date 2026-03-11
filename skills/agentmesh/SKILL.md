@@ -1,7 +1,7 @@
 ---
 name: agentmesh
-description: Multi-agent orchestration skill. Dispatch tasks to Claude Code or Codex CLI, share context and memory across agents. Triggers on "dispatch to claude", "codex review", "multi-agent", "agentmesh run".
-version: 0.1.0
+description: Multi-agent orchestration skill. Dispatch tasks to Claude Code or Codex CLI, share context and memory across agents. Triggers on "dispatch to claude", "codex review", "multi-agent", "agentmesh run", "pipeline".
+version: 0.2.0
 metadata:
   openclaw:
     requires:
@@ -47,7 +47,43 @@ Let agentmesh decide which agent is best:
 agentmesh run "fix the null pointer bug in user service"
 ```
 
-### 4) Check agent status
+### 4) Run a pipeline
+
+Execute a multi-step workflow defined in YAML:
+
+```bash
+agentmesh pipeline pipeline.yaml
+```
+
+Pipeline YAML format:
+```yaml
+name: feature-pipeline
+tasks:
+  - id: analyze
+    prompt: "Analyze the codebase"
+    agent: openclaw
+  - id: implement
+    prompt: "Implement the feature"
+    agent: claude_code
+    depends_on: [analyze]
+  - id: review
+    prompt: "Review the code"
+    agent: codex_cli
+    depends_on: [implement]
+```
+
+### 5) Interactive chat mode
+
+Start a REPL session with agent switching:
+
+```bash
+agentmesh chat
+agentmesh chat --agent claude_code  # lock to specific agent
+```
+
+Chat commands: `/agent <name>`, `/auto`, `/status`, `/history`, `/exit`
+
+### 6) Check agent status
 
 ```bash
 agentmesh status
@@ -55,11 +91,18 @@ agentmesh status
 
 ## Routing Rules
 
-- "review", "audit", "check" -> Codex CLI
-- "implement", "write", "create", "fix" -> Claude Code
-- "analyze", "plan", "design" -> OpenClaw (self)
-- "test", "spec" -> Codex CLI
-- "deploy", "devops" -> OpenClaw (self)
+- "review", "audit", "check", "审查" -> Codex CLI
+- "implement", "write", "fix", "实现", "修复" -> Claude Code
+- "analyze", "plan", "design", "分析", "设计" -> OpenClaw (self)
+- "test", "spec", "测试" -> Codex CLI
+- "deploy", "devops", "部署" -> OpenClaw (self)
+
+## When to Dispatch
+
+If the current task is better handled by another agent, dispatch it:
+- Need code implementation? -> `agentmesh run --agent claude_code "..."`
+- Need code review? -> `agentmesh run --agent codex_cli "..."`
+- Multi-step workflow? -> create a pipeline YAML and run it
 
 ## Context
 
