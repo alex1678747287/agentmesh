@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agentmesh.memory import build_memory_context
+
 
 class ContextBuilder:
     """
     Hot:  .ai/profile.md + .ai/rules.md  (~200 tokens, always loaded)
     Warm: .ai/projects/{name}.md          (~500 tokens, per project)
+    Auto: .ai/memory.jsonl recent entries (~200 tokens, auto-recorded)
     Cold: MCP memory search               (on demand)
     """
 
@@ -45,6 +48,10 @@ class ContextBuilder:
             parts.append(self.hot)
         if self.warm:
             parts.append(f"# Project: {self.project}\n{self.warm}")
+        # Auto memory: inject recent entries
+        mem = build_memory_context(10)
+        if mem:
+            parts.append(mem)
         return "\n\n---\n\n".join(parts)
 
     def invalidate(self):

@@ -54,7 +54,7 @@ def run(ctx, prompt, agent, project, explain):
         project=project,
     )
     router = Router(config.get("router", {}))
-    scheduler = Scheduler(adapters, context_builder)
+    scheduler = Scheduler(adapters, context_builder, project=project)
 
     target = router.route(prompt, explicit_agent=agent)
     if explain:
@@ -85,7 +85,7 @@ def pipeline(ctx, pipeline_file, project):
         ai_dir=config["context"]["ai_dir"],
         project=project,
     )
-    scheduler = Scheduler(adapters, context_builder)
+    scheduler = Scheduler(adapters, context_builder, project=project)
     pipe = load_pipeline(pipeline_file)
 
     console.print(f"[bold]Pipeline: {pipe.name}[/bold]")
@@ -134,7 +134,7 @@ def chat(ctx, agent, project):
         project=project,
     )
     router = Router(config.get("router", {}))
-    scheduler = Scheduler(adapters, context_builder)
+    scheduler = Scheduler(adapters, context_builder, project=project)
 
     locked_agent = agent
     history: list[tuple[str, str, str]] = []  # (agent, prompt, output_preview)
@@ -310,6 +310,36 @@ def log(ctx, days, agent):
             f"{e['duration']}s",
             f"[{exit_style}]{e['exit_code']}[/{exit_style}]",
             e.get("prompt_preview", "")[:40],
+        )
+    console.print(table)
+
+
+@main.command()
+@click.option("--count", "-n", default=20, help="Number of entries to show")
+@click.pass_context
+def memory(ctx, count):
+    """Show auto-recorded memory entries."""
+    from agentmesh.memory import load_recent_memory
+
+    entries = load_recent_memory(count)
+    if not entries:
+        console.print("[dim]No memory entries yet[/dim]")
+        return
+
+    table = Table(title=f"Memory (last {len(entries)} entries)")
+    table.add_column("Time", style="dim")
+    table.add_column("Agent", style="cyan")
+    table.add_column("Kind")
+    table.add_column("Tags")
+    table.add_column("Content", max_width=50)
+
+    for e in entries:
+        table.add_row(
+            e.get("ts", "")[:19],
+            e.get("agent", ""),
+            e.get("kind", ""),
+            ", ".join(e.get("tags", [])),
+            e.get("content", "")[:50],
         )
     console.print(table)
 

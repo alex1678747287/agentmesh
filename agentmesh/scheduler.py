@@ -8,6 +8,7 @@ import time
 from agentmesh.adapters import BaseAdapter
 from agentmesh.context import ContextBuilder
 from agentmesh.logger import log_result
+from agentmesh.memory import record_memory
 from agentmesh.models import AgentResult, AgentType, Pipeline, Task, TaskStatus
 
 
@@ -16,9 +17,11 @@ class Scheduler:
         self,
         adapters: dict[AgentType, BaseAdapter],
         context_builder: ContextBuilder | None = None,
+        project: str | None = None,
     ):
         self.adapters = adapters
         self.context_builder = context_builder
+        self.project = project
 
     async def run_single(self, prompt: str, agent: AgentType,
                          timeout: int = 300) -> AgentResult:
@@ -32,6 +35,7 @@ class Scheduler:
         result = await adapter.execute(prompt, context, timeout)
         result.duration = time.monotonic() - start
         log_result(result, prompt)
+        record_memory(result, prompt, self.project)
         return result
 
     async def run_pipeline(self, pipeline: Pipeline) -> list[AgentResult]:
@@ -90,4 +94,5 @@ class Scheduler:
         result.duration = time.monotonic() - start
         task.status = TaskStatus.DONE
         log_result(result, task.prompt)
+        record_memory(result, task.prompt, self.project)
         return result
