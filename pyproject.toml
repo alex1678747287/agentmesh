@@ -3,14 +3,13 @@ name = "agentmesh"
 version = "0.1.0"
 description = "Multi AI agent collaboration hub - unified context, memory and orchestration for Claude Code, Codex CLI and OpenClaw"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.11"
 authors = [{name = "alex1678747287"}]
 keywords = ["ai", "agent", "orchestration", "claude", "codex", "openclaw"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries",
@@ -29,7 +28,10 @@ agentmesh = "agentmesh.cli:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agentmesh*"]
 
 [tool.ruff]
 line-length = 100

@@ -42,8 +42,8 @@ class OpenClawAdapter(BaseAdapter):
 
     async def health_check(self) -> bool:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "openclaw", "--version",
+            proc = await asyncio.create_subprocess_shell(
+                "openclaw --version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

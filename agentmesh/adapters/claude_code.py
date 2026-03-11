@@ -49,8 +49,8 @@ class ClaudeCodeAdapter(BaseAdapter):
 
     async def health_check(self) -> bool:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "claude", "--version",
+            proc = await asyncio.create_subprocess_shell(
+                "claude --version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

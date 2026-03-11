@@ -57,6 +57,7 @@ def get_adapter(agent_type: AgentType, config: dict) -> BaseAdapter:
 
 def get_all_adapters(config: dict) -> dict[AgentType, BaseAdapter]:
     """Get all registered adapters."""
+    _ensure_registered()
     agents_config = config.get("agents", {})
     result = {}
     for agent_type, cls in _ADAPTERS.items():
@@ -64,3 +65,10 @@ def get_all_adapters(config: dict) -> dict[AgentType, BaseAdapter]:
         if agents_config.get(agent_key, {}).get("enabled", True):
             result[agent_type] = cls(agents_config.get(agent_key, {}))
     return result
+
+
+def _ensure_registered():
+    """Import adapter modules to trigger @register_adapter decorators."""
+    if _ADAPTERS:
+        return
+    from agentmesh.adapters import claude_code, codex_cli, openclaw  # noqa: F401

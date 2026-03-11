@@ -43,8 +43,8 @@ class CodexCLIAdapter(BaseAdapter):
 
     async def health_check(self) -> bool:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "codex", "--version",
+            proc = await asyncio.create_subprocess_shell(
+                "codex --version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
