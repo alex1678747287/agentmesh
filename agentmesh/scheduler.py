@@ -7,6 +7,7 @@ import time
 
 from agentmesh.adapters import BaseAdapter
 from agentmesh.context import ContextBuilder
+from agentmesh.logger import log_result
 from agentmesh.models import AgentResult, AgentType, Pipeline, Task, TaskStatus
 
 
@@ -30,6 +31,7 @@ class Scheduler:
         start = time.monotonic()
         result = await adapter.execute(prompt, context, timeout)
         result.duration = time.monotonic() - start
+        log_result(result, prompt)
         return result
 
     async def run_pipeline(self, pipeline: Pipeline) -> list[AgentResult]:
@@ -87,4 +89,5 @@ class Scheduler:
         result.task_id = task.id
         result.duration = time.monotonic() - start
         task.status = TaskStatus.DONE
+        log_result(result, task.prompt)
         return result

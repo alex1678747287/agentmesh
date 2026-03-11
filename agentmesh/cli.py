@@ -132,5 +132,37 @@ def sync(ctx, dir):
     console.print(f"[green]Synced .ai/ to CLAUDE.md and AGENTS.md in {project_dir}[/green]")
 
 
+@main.command()
+@click.option("--days", "-d", default=7, help="Number of days to show")
+@click.option("--agent", "-a", default=None, help="Filter by agent")
+@click.pass_context
+def log(ctx, days, agent):
+    """Show execution logs."""
+    from agentmesh.logger import read_logs
+
+    entries = read_logs(days=days, agent=agent)
+    if not entries:
+        console.print("[dim]No logs found[/dim]")
+        return
+
+    table = Table(title=f"Execution Log (last {days} days)")
+    table.add_column("Time", style="dim")
+    table.add_column("Agent", style="cyan")
+    table.add_column("Duration")
+    table.add_column("Exit")
+    table.add_column("Prompt", max_width=40)
+
+    for e in entries[-20:]:  # show last 20
+        exit_style = "green" if e["exit_code"] == 0 else "red"
+        table.add_row(
+            e["ts"][:19],
+            e["agent"],
+            f"{e['duration']}s",
+            f"[{exit_style}]{e['exit_code']}[/{exit_style}]",
+            e.get("prompt_preview", "")[:40],
+        )
+    console.print(table)
+
+
 if __name__ == "__main__":
     main()
