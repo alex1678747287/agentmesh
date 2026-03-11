@@ -1,10 +1,28 @@
-"""Three-tier context builder: hot / warm / cold."""
+"""Three-tier context builder: hot / warm / cold, with token limits."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from agentmesh.memory import build_memory_context
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token for mixed EN/CN."""
+    return len(text) // 3
+
+
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Truncate text to approximate token limit."""
+    max_chars = max_tokens * 3
+    if len(text) <= max_chars:
+        return text
+    # Truncate at last newline before limit
+    truncated = text[:max_chars]
+    last_nl = truncated.rfind("\n")
+    if last_nl > max_chars // 2:
+        truncated = truncated[:last_nl]
+    return truncated + "\n[...truncated]"
 
 
 class ContextBuilder:
@@ -15,9 +33,15 @@ class ContextBuilder:
     Cold: MCP memory search               (on demand)
     """
 
-    def __init__(self, ai_dir: str | Path = ".ai", project: str | None = None):
+    def __init__(self, ai_dir: str | Path = ".ai", project: str | None = None,
+                 max_hot_tokens: int = 300, max_warm_tokens: int = 500,
+                 max_memory_tokens: int = 200, max_total_tokens: int = 1500):
         self.ai_dir = Path(ai_dir)
         self.project = project
+        self.max_hot = max_hot_tokens
+        self.max_warm = max_warm_tokens
+        self.max_memory = max_memory_tokens
+        self.max_total = max_total_tokens
         self._hot: str | None = None
         self._warm: str | None = None
 
@@ -30,7 +54,8 @@ class ContextBuilder:
                 p = self.ai_dir / name
                 if p.exists():
                     parts.append(p.read_text("utf-8").strip())
-            self._hot = "\n\n".join(parts)
+            raw = "\n\n".join(parts)
+            self._hot = _truncate_to_tokens(raw, self.max_hot)
         return self._hot
 
     @property
@@ -38,21 +63,23 @@ class ContextBuilder:
         """Load warm memory: project-specific context."""
         if self._warm is None and self.project:
             p = self.ai_dir / "projects" / f"{self.project}.md"
-            self._warm = p.read_text("utf-8").strip() if p.exists() else ""
+            raw = p.read_text("utf-8").strip() if p.exists() else ""
+            self._warm = _truncate_to_tokens(raw, self.max_warm)
         return self._warm or ""
 
     def build(self) -> str:
-        """Assemble full context string."""
+        """Assemble full context string with token budget."""
         parts = []
         if self.hot:
             parts.append(self.hot)
         if self.warm:
             parts.append(f"# Project: {self.project}\n{self.warm}")
-        # Auto memory: inject recent entries
         mem = build_memory_context(10)
         if mem:
-            parts.append(mem)
-        return "\n\n---\n\n".join(parts)
+            parts.append(_truncate_to_tokens(mem, self.max_memory))
+
+        full = "\n\n---\n\n".join(parts)
+        return _truncate_to_tokens(full, self.max_total)
 
     def invalidate(self):
         """Clear cached context."""

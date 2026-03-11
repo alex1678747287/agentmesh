@@ -1,4 +1,4 @@
-"""Agent router - decides which agent handles a task."""
+"""Agent router - decides which agent handles a task, with availability awareness."""
 
 from __future__ import annotations
 
@@ -30,33 +30,50 @@ class Router:
         self.config = config or {}
         self.default = AgentType(self.config.get("default_agent", "claude_code"))
         self.rules = list(ROUTE_RULES)
-        # Merge user-defined rules from config
         for pattern, agent_name in self.config.get("rules", {}).items():
             self.rules.append((pattern, AgentType(agent_name), 10))
 
-    def route(self, prompt: str, explicit_agent: str | None = None) -> AgentType:
-        """Determine which agent should handle the prompt."""
+    def route(self, prompt: str, explicit_agent: str | None = None,
+              available: set[AgentType] | None = None) -> AgentType:
+        """Determine which agent should handle the prompt.
+        If available is provided, only route to online agents.
+        """
         if explicit_agent:
-            return AgentType(explicit_agent)
+            target = AgentType(explicit_agent)
+            # If explicitly requested but unavailable, still return it
+            # (scheduler handles fallback)
+            return target
 
         prompt_lower = prompt.lower()
-        best_agent = self.default
-        best_score = 0
-
+        # Score all agents
+        scores: dict[AgentType, int] = {}
         for pattern, agent_type, weight in self.rules:
             matches = re.findall(pattern, prompt_lower)
             if matches:
-                score = len(matches) * weight
-                if score > best_score:
-                    best_score = score
-                    best_agent = agent_type
+                scores[agent_type] = scores.get(agent_type, 0) + len(matches) * weight
 
-        return best_agent
+        if not scores:
+            # No pattern matched, use default
+            if available and self.default not in available:
+                return next(iter(available)) if available else self.default
+            return self.default
+
+        # Sort by score descending
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+        # If availability info provided, prefer available agents
+        if available:
+            for agent, _score in ranked:
+                if agent in available:
+                    return agent
+            # All matched agents unavailable, pick any available one
+            return next(iter(available))
+
+        return ranked[0][0]
 
     def explain(self, prompt: str) -> str:
         """Explain routing decision for debugging."""
         prompt_lower = prompt.lower()
-        # Aggregate scores per agent
         scores: dict[str, tuple[list[str], int]] = {}
         for pattern, agent_type, weight in self.rules:
             matches = re.findall(pattern, prompt_lower)

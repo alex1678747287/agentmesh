@@ -38,6 +38,7 @@ class Task:
     status: TaskStatus = TaskStatus.PENDING
     depends_on: list[str] = field(default_factory=list)
     result: AgentResult | None = None
+    condition: dict | None = None  # {"on": "task_id", "if_exit": 0}
 
 
 @dataclass

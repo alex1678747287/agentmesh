@@ -1,4 +1,4 @@
-"""Pipeline loader - parse YAML pipeline definitions."""
+"""Pipeline loader - parse YAML pipeline definitions with conditional branches."""
 
 from __future__ import annotations
 
@@ -26,6 +26,16 @@ def load_pipeline(path: str | Path) -> Pipeline:
             prompt: "Review the implementation"
             agent: codex_cli
             depends_on: [implement]
+            condition:
+              on: implement
+              if_exit: 0        # only run if implement succeeded
+          - id: hotfix
+            prompt: "Fix the failed implementation"
+            agent: claude_code
+            depends_on: [implement]
+            condition:
+              on: implement
+              if_exit: 1        # only run if implement failed
     """
     p = Path(path)
     with open(p, encoding="utf-8") as f:
@@ -33,11 +43,16 @@ def load_pipeline(path: str | Path) -> Pipeline:
 
     tasks = []
     for t in data.get("tasks", []):
+        condition = None
+        if "condition" in t:
+            condition = t["condition"]
+
         tasks.append(Task(
             id=t.get("id", ""),
             prompt=t.get("prompt", ""),
             agent=AgentType(t.get("agent", "claude_code")),
             depends_on=t.get("depends_on", []),
+            condition=condition,
         ))
 
     return Pipeline(name=data.get("name", p.stem), tasks=tasks)

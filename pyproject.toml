@@ -25,6 +25,7 @@ dev = ["pytest", "pytest-asyncio", "ruff", "mypy"]
 
 [project.scripts]
 agentmesh = "agentmesh.cli:main"
+agentmesh-mcp = "agentmesh.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

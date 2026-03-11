@@ -1,4 +1,5 @@
-# Example pipeline: analyze -> implement -> review
+# Example pipeline with conditional branches
+# analyze -> implement -> review (if success) / hotfix (if fail)
 name: feature-pipeline
 tasks:
   - id: analyze
@@ -14,3 +15,14 @@ tasks:
     prompt: "Review the implementation for code quality and security"
     agent: codex_cli
     depends_on: [implement]
+    condition:
+      "on": implement
+      if_exit: 0  # only review if implementation succeeded
+
+  - id: hotfix
+    prompt: "Fix the failed implementation based on error output"
+    agent: claude_code
+    depends_on: [implement]
+    condition:
+      "on": implement
+      if_exit: 1  # only hotfix if implementation failed

@@ -344,5 +344,12 @@ def memory(ctx, count):
     console.print(table)
 
 
+@main.command(name="mcp-server")
+def mcp_server():
+    """Start agentmesh as an MCP server (stdio transport)."""
+    from agentmesh.mcp_server import main as mcp_main
+    mcp_main()
+
+
 if __name__ == "__main__":
     main()

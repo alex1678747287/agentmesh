@@ -10,32 +10,32 @@ COLLAB_INSTRUCTIONS = """
 # AgentMesh Collaboration
 
 You are part of a multi-agent system managed by agentmesh.
-When a task is better suited for another agent, use agentmesh to dispatch it.
+When a task is better suited for another agent, dispatch it via MCP tools or CLI.
 
-## Available Commands
+## MCP Tools (preferred - native integration)
+
+If agentmesh MCP server is available, use these tools directly:
+- `agentmesh_dispatch` - dispatch a task to another agent (auto-routes or specify agent)
+- `agentmesh_status` - check which agents are online
+- `agentmesh_memory` - read shared memory from cross-agent executions
+
+## CLI Commands (fallback)
 
 ```bash
-# Run a task on a specific agent
 agentmesh run --agent claude_code "implement user login"
 agentmesh run --agent codex_cli "review auth module"
 agentmesh run --agent openclaw "analyze project architecture"
-
-# Auto-route (agentmesh picks the best agent)
-agentmesh run "fix the null pointer bug"
-
-# Run a multi-step pipeline
-agentmesh pipeline pipeline.yaml
-
-# Check which agents are online
-agentmesh status
+agentmesh run "fix the null pointer bug"  # auto-route
+agentmesh pipeline pipeline.yaml          # multi-step DAG
+agentmesh status                          # check agents
 ```
 
 ## When to Dispatch
 
-- You need code review -> dispatch to codex_cli
-- You need implementation -> dispatch to claude_code
-- You need analysis/planning -> dispatch to openclaw
-- Complex task needs multiple agents -> use pipeline
+- Code review/audit -> codex_cli
+- Implementation/fix -> claude_code
+- Analysis/planning -> openclaw
+- Agent unavailable -> agentmesh auto-fallbacks to next best agent
 
 ## Shared Context
 
@@ -43,6 +43,7 @@ All agents share context via `.ai/` directory:
 - `.ai/profile.md` - user preferences
 - `.ai/rules.md` - coding rules
 - `.ai/projects/{name}.md` - project-specific context
+- `.ai/memory.jsonl` - auto-recorded execution memory
 """.strip()
 
 
