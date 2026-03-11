@@ -1,0 +1,33 @@
+# agentmesh configuration
+# Copy to agentmesh.yaml in your project root
+
+agents:
+  claude_code:
+    enabled: true
+    timeout: 300
+    max_turns: 10
+    # allowed_tools: [Read, Write, Edit, Bash, Grep, Glob]
+
+  codex_cli:
+    enabled: true
+    timeout: 300
+    approval_mode: auto-edit
+
+  openclaw:
+    enabled: true
+    timeout: 300
+    gateway_url: ws://localhost:19888
+
+context:
+  ai_dir: .ai
+  hot_max_tokens: 200
+  warm_max_tokens: 500
+
+router:
+  default_agent: claude_code
+  rules:
+    review: codex_cli
+    implement: claude_code
+    analyze: openclaw
+    test: codex_cli
+    deploy: openclaw
