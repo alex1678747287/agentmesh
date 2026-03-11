@@ -5,7 +5,7 @@ description = "Multi AI agent collaboration hub - unified context, memory and or
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
-authors = [{name = "agentmesh contributors"}]
+authors = [{name = "alex1678747287"}]
 keywords = ["ai", "agent", "orchestration", "claude", "codex", "openclaw"]
 classifiers = [
     "Development Status :: 3 - Alpha",
