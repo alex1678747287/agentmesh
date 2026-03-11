@@ -54,7 +54,7 @@ def run(ctx, prompt, agent, project, explain):
         project=project,
     )
     router = Router(config.get("router", {}))
-    scheduler = Scheduler(adapters, context_builder, project=project)
+    scheduler = Scheduler(adapters, context_builder, project=project, config=config)
 
     target = router.route(prompt, explicit_agent=agent)
     if explain:
@@ -85,9 +85,53 @@ def pipeline(ctx, pipeline_file, project):
         ai_dir=config["context"]["ai_dir"],
         project=project,
     )
-    scheduler = Scheduler(adapters, context_builder, project=project)
+    scheduler = Scheduler(adapters, context_builder, project=project, config=config)
     pipe = load_pipeline(pipeline_file)
 
+    _print_pipeline_results(pipe, scheduler)
+
+
+@main.command()
+@click.argument("template_name", type=click.Choice(["dev", "tdd", "review", "fullstack"]))
+@click.argument("prompt", nargs=-1, required=True)
+@click.option("--project", "-p", default=None, help="Project name for warm context")
+@click.pass_context
+def template(ctx, template_name, prompt, project):
+    """Run a built-in pipeline template.
+
+    Templates: dev (analyze->implement->review), tdd (implement->test->fix),
+    review (review->fix), fullstack (design->backend+frontend->review)
+    """
+    from agentmesh.pipeline import load_template
+
+    prompt_str = " ".join(prompt)
+    config = ctx.obj["config"]
+    adapters = get_all_adapters(config)
+    context_builder = ContextBuilder(
+        ai_dir=config["context"]["ai_dir"],
+        project=project,
+    )
+    scheduler = Scheduler(adapters, context_builder, project=project, config=config)
+    pipe = load_template(template_name, prompt_str)
+
+    _print_pipeline_results(pipe, scheduler)
+
+
+@main.command(name="templates")
+def list_templates_cmd():
+    """List available pipeline templates."""
+    from agentmesh.pipeline import list_templates
+
+    table = Table(title="Pipeline Templates")
+    table.add_column("Name", style="cyan")
+    table.add_column("Description")
+    for t in list_templates():
+        table.add_row(t["name"], t["description"])
+    console.print(table)
+
+
+def _print_pipeline_results(pipe, scheduler):
+    """Run pipeline and print results table."""
     console.print(f"[bold]Pipeline: {pipe.name}[/bold]")
     console.print(f"[dim]Tasks: {len(pipe.tasks)}[/dim]")
 
@@ -134,7 +178,7 @@ def chat(ctx, agent, project):
         project=project,
     )
     router = Router(config.get("router", {}))
-    scheduler = Scheduler(adapters, context_builder, project=project)
+    scheduler = Scheduler(adapters, context_builder, project=project, config=config)
 
     locked_agent = agent
     history: list[tuple[str, str, str]] = []  # (agent, prompt, output_preview)

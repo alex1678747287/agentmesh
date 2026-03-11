@@ -1,55 +1,95 @@
-"""Auto memory - extract and persist key info from agent outputs."""
+"""Auto memory - extract and persist key info from agent outputs.
+
+Features:
+- Regex-based extraction of files, fixes, APIs, deps, configs, DB ops, errors
+- TTL-based expiry (default 7 days) with kind-specific TTLs
+- Deduplication against recent entries
+- Efficient tail-read for recent queries
+"""
 
 from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from agentmesh.models import AgentResult
 
 MEMORY_FILE = Path(".ai/memory.jsonl")
-MAX_ENTRIES = 200  # rolling window
+MAX_ENTRIES = 200
+
+# TTL per kind (days). Entries older than this are expired during cleanup.
+_TTL_DAYS: dict[str, int] = {
+    "error": 3,      # errors become stale fast
+    "summary": 5,
+    "file": 7,
+    "fix": 14,        # bugfix knowledge is valuable longer
+    "api": 14,
+    "dep": 14,
+    "config": 14,
+    "db": 30,         # schema changes are long-lived
+}
+_DEFAULT_TTL_DAYS = 7
+
+# In-memory cache for recent entries (avoids full file scan)
+_cache: deque[dict] | None = None
+_cache_mtime: float = 0
 
 # Patterns to extract key info from agent output
 _EXTRACTORS: list[tuple[str, list[str], re.Pattern]] = [
-    # File paths created/modified
     ("file", ["file", "change"], re.compile(
         r"(?:created?|modified?|updated?|wrote|deleted?|added?)\s+(?:file\s+)?[`'\"]?([^\s`'\"]{3,}\.[\w]{1,10})[`'\"]?",
         re.IGNORECASE,
     )),
-    # Error fixes
     ("fix", ["bugfix"], re.compile(
         r"(?:fixed?|resolved?|patched?|solved?)\s+(.{10,120}?)(?:\.|$|\n)",
         re.IGNORECASE,
     )),
-    # API endpoints
     ("api", ["api"], re.compile(
         r"(?:endpoint|route|api|handler)\s*[:=]?\s*[`'\"]?((?:GET|POST|PUT|DELETE|PATCH)\s+/\S+)",
         re.IGNORECASE,
     )),
-    # Dependencies added
     ("dep", ["dependency"], re.compile(
         r"(?:installed?|added?)\s+(?:package|dependency|dep|module)\s+[`'\"]?(\S+)[`'\"]?",
         re.IGNORECASE,
     )),
-    # Config changes
     ("config", ["config"], re.compile(
         r"(?:set|configured?|changed?|updated?)\s+(?:config\s+)?[`'\"]?(\S+)[`'\"]?\s*(?:to|=)\s*[`'\"]?(.{1,50}?)[`'\"]?(?:\s|$|\.|,)",
         re.IGNORECASE,
     )),
-    # Database operations
     ("db", ["database"], re.compile(
         r"(?:CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+INDEX|migration)\s+[`'\"]?(\S+)[`'\"]?",
         re.IGNORECASE,
     )),
-    # Error messages (for learning)
     ("error", ["error"], re.compile(
         r"(?:error|exception|panic|traceback)[:]\s*(.{10,100}?)(?:\n|$)",
         re.IGNORECASE,
     )),
 ]
+
+
+def _get_cache() -> deque[dict]:
+    """Load entries into cache, refreshing if file changed."""
+    global _cache, _cache_mtime
+    if not MEMORY_FILE.exists():
+        _cache = deque(maxlen=MAX_ENTRIES)
+        return _cache
+    mtime = MEMORY_FILE.stat().st_mtime
+    if _cache is not None and mtime == _cache_mtime:
+        return _cache
+    _cache = deque(maxlen=MAX_ENTRIES)
+    with open(MEMORY_FILE, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    _cache.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    _cache_mtime = mtime
+    return _cache
 
 
 def record_memory(result: AgentResult, prompt: str = "", project: str | None = None):
@@ -64,7 +104,8 @@ def record_memory(result: AgentResult, prompt: str = "", project: str | None = N
     MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     # Deduplicate against recent entries
-    existing = _load_recent_content(20)
+    cache = _get_cache()
+    existing = {e.get("content", "") for e in list(cache)[-20:]}
     new_entries = [e for e in entries if e["content"] not in existing]
     if not new_entries:
         return
@@ -72,29 +113,34 @@ def record_memory(result: AgentResult, prompt: str = "", project: str | None = N
     with open(MEMORY_FILE, "a", encoding="utf-8") as f:
         for entry in new_entries:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            cache.append(entry)
 
-    _trim_memory()
+    global _cache_mtime
+    _cache_mtime = MEMORY_FILE.stat().st_mtime
+    _cleanup_expired()
 
 
 def load_recent_memory(n: int = 20) -> list[dict]:
-    """Load the most recent n memory entries."""
-    if not MEMORY_FILE.exists():
-        return []
-    entries = []
-    with open(MEMORY_FILE, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    return entries[-n:]
+    """Load the most recent n memory entries (from cache)."""
+    cache = _get_cache()
+    return list(cache)[-n:]
 
 
-def build_memory_context(n: int = 10) -> str:
-    """Build a context string from recent memory entries."""
-    entries = load_recent_memory(n)
+def build_memory_context(n: int = 10, prompt: str = "") -> str:
+    """Build a context string from memory entries relevant to the prompt.
+
+    If prompt is given, score entries by keyword overlap and pick top N.
+    Otherwise fall back to most recent N entries.
+    """
+    cache = _get_cache()
+    if not cache:
+        return ""
+
+    if prompt:
+        entries = _rank_by_relevance(list(cache), prompt, n)
+    else:
+        entries = list(cache)[-n:]
+
     if not entries:
         return ""
     lines = ["# Recent Memory"]
@@ -104,10 +150,79 @@ def build_memory_context(n: int = 10) -> str:
     return "\n".join(lines)
 
 
-def _load_recent_content(n: int) -> set[str]:
-    """Load content strings of recent entries for dedup."""
-    entries = load_recent_memory(n)
-    return {e.get("content", "") for e in entries}
+def _rank_by_relevance(entries: list[dict], prompt: str, n: int) -> list[dict]:
+    """Score entries by keyword overlap with prompt, return top N."""
+    # Tokenize prompt into keywords (3+ chars, lowered)
+    keywords = set(
+        w for w in re.split(r"[\s/\\.,;:!?(){}[\]\"'`]+", prompt.lower())
+        if len(w) >= 3
+    )
+    if not keywords:
+        return entries[-n:]
+
+    scored: list[tuple[float, int, dict]] = []
+    for idx, entry in enumerate(entries):
+        searchable = (
+            entry.get("content", "") + " " +
+            " ".join(entry.get("tags", []))
+        ).lower()
+        # Count keyword hits
+        hits = sum(1 for kw in keywords if kw in searchable)
+        if hits == 0:
+            continue
+        # Boost recent entries slightly (recency bonus: 0~0.5)
+        recency = idx / max(len(entries), 1) * 0.5
+        score = hits + recency
+        scored.append((score, idx, entry))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    result = [e for _, _, e in scored[:n]]
+
+    # If not enough relevant entries, pad with most recent
+    if len(result) < n:
+        existing = {id(e) for e in result}
+        for entry in reversed(entries):
+            if id(entry) not in existing:
+                result.append(entry)
+                if len(result) >= n:
+                    break
+
+    return result
+
+
+def _is_expired(entry: dict) -> bool:
+    """Check if an entry has exceeded its TTL."""
+    ts_str = entry.get("ts", "")
+    if not ts_str:
+        return False
+    try:
+        ts = datetime.fromisoformat(ts_str)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return False
+    kind = entry.get("kind", "")
+    ttl = timedelta(days=_TTL_DAYS.get(kind, _DEFAULT_TTL_DAYS))
+    return datetime.now(timezone.utc) - ts > ttl
+
+
+def _cleanup_expired():
+    """Remove expired entries and enforce MAX_ENTRIES."""
+    global _cache, _cache_mtime
+    if not MEMORY_FILE.exists():
+        return
+    cache = _get_cache()
+    kept = [e for e in cache if not _is_expired(e)]
+    if len(kept) > MAX_ENTRIES:
+        kept = kept[-MAX_ENTRIES:]
+    # Only rewrite if something was removed
+    if len(kept) < len(cache):
+        MEMORY_FILE.write_text(
+            "\n".join(json.dumps(e, ensure_ascii=False) for e in kept) + "\n",
+            encoding="utf-8",
+        )
+        _cache = deque(kept, maxlen=MAX_ENTRIES)
+        _cache_mtime = MEMORY_FILE.stat().st_mtime
 
 
 def _extract_entries(prompt: str, output: str, agent: str,
@@ -115,7 +230,6 @@ def _extract_entries(prompt: str, output: str, agent: str,
     """Extract structured memory entries from agent output."""
     entries = []
     ts = datetime.now(timezone.utc).isoformat()
-    # Scan first 3000 chars of output
     scan_text = output[:3000]
 
     for kind, tags, pattern in _EXTRACTORS:
@@ -128,42 +242,44 @@ def _extract_entries(prompt: str, output: str, agent: str,
                 "agent": agent,
                 "kind": kind,
                 "tags": tags + ([project] if project else []),
-                "content": content[:200],
+                "content": _redact_sensitive(content[:200]),
             }
             entries.append(entry)
 
-    # Always record a summary if output is substantial and no patterns matched
     if len(output) > 100 and not entries:
-        # Smart summary: take first meaningful line
         summary = _smart_summary(output)
         entries.append({
             "ts": ts,
             "agent": agent,
             "kind": "summary",
             "tags": ["task"] + ([project] if project else []),
-            "content": f"[{prompt[:50]}] {summary}",
+            "content": _redact_sensitive(f"[{prompt[:50]}] {summary}"),
         })
 
-    return entries[:5]  # cap per execution
+    return entries[:5]
+
+
+# Sensitive patterns to redact before storing to memory
+_SENSITIVE_RE = [
+    re.compile(r"(?:password|passwd|pwd)\s*[:=]\s*\S+", re.IGNORECASE),
+    re.compile(r"(?:token|api[_-]?key|secret[_-]?key)\s*[:=]\s*\S+", re.IGNORECASE),
+    re.compile(r"(?:sk|pk|ak)-[a-zA-Z0-9]{20,}"),
+]
+
+
+def _redact_sensitive(text: str) -> str:
+    """Redact sensitive data from text before storing."""
+    for pattern in _SENSITIVE_RE:
+        text = pattern.sub("[REDACTED]", text)
+    return text
 
 
 def _smart_summary(output: str) -> str:
     """Extract a meaningful summary from output, skipping noise."""
     lines = output.strip().splitlines()
-    # Skip empty lines and common noise
     noise = {"", "$", ">", "---", "```", "ok", "done", "success"}
     for line in lines[:20]:
         cleaned = line.strip().lower()
         if cleaned not in noise and len(cleaned) > 10:
             return line.strip()[:150]
     return output[:150].replace("\n", " ").strip()
-
-
-def _trim_memory():
-    """Keep memory file within MAX_ENTRIES."""
-    if not MEMORY_FILE.exists():
-        return
-    lines = MEMORY_FILE.read_text("utf-8").strip().splitlines()
-    if len(lines) > MAX_ENTRIES:
-        trimmed = lines[-MAX_ENTRIES:]
-        MEMORY_FILE.write_text("\n".join(trimmed) + "\n", "utf-8")

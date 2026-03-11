@@ -12,7 +12,7 @@ from agentmesh.models import AgentResult, AgentType
 @register_adapter(AgentType.CODEX_CLI)
 class CodexCLIAdapter(BaseAdapter):
 
-    async def execute(self, prompt: str, context: str = "", timeout: int = 300) -> AgentResult:
+    async def _execute(self, prompt: str, context: str = "", timeout: int = 300) -> AgentResult:
         full_prompt = self.build_prompt(prompt, context)
         approval = self.config.get("approval_mode", "auto-edit")
         cmd = ["codex", "exec", full_prompt, "--approval-mode", approval]
@@ -49,6 +49,16 @@ class CodexCLIAdapter(BaseAdapter):
                 stderr=asyncio.subprocess.PIPE,
             )
             await asyncio.wait_for(proc.communicate(), timeout=10)
-            return proc.returncode == 0
+            if proc.returncode != 0:
+                return False
+            if self.config.get("deep_health_check", False):
+                proc = await asyncio.create_subprocess_exec(
+                    "codex", "exec", "ping", "--approval-mode", "auto-edit",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                return proc.returncode == 0 and len(stdout) > 0
+            return True
         except Exception:
             return False

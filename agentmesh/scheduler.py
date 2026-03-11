@@ -10,13 +10,7 @@ from agentmesh.context import ContextBuilder
 from agentmesh.logger import log_result
 from agentmesh.memory import record_memory
 from agentmesh.models import AgentResult, AgentType, Pipeline, Task, TaskStatus
-
-# Fallback order when an agent is unavailable
-FALLBACK_MAP: dict[AgentType, list[AgentType]] = {
-    AgentType.CLAUDE_CODE: [AgentType.OPENCLAW, AgentType.CODEX_CLI],
-    AgentType.CODEX_CLI: [AgentType.CLAUDE_CODE, AgentType.OPENCLAW],
-    AgentType.OPENCLAW: [AgentType.CLAUDE_CODE, AgentType.CODEX_CLI],
-}
+from agentmesh.validator import validate_output
 
 
 class Scheduler:
@@ -25,17 +19,43 @@ class Scheduler:
         adapters: dict[AgentType, BaseAdapter],
         context_builder: ContextBuilder | None = None,
         project: str | None = None,
+        config: dict | None = None,
+        health_cache_ttl: int = 10,
     ):
         self.adapters = adapters
         self.context_builder = context_builder
         self.project = project
         self._health_cache: dict[AgentType, bool] = {}
         self._health_ts: float = 0
+        self._health_ttl = health_cache_ttl
+        # Load fallback order from config, with sensible defaults
+        self._fallback_map = self._build_fallback_map(config)
+
+    def _build_fallback_map(self, config: dict | None) -> dict[AgentType, list[AgentType]]:
+        default = {
+            AgentType.CLAUDE_CODE: [AgentType.OPENCLAW, AgentType.CODEX_CLI],
+            AgentType.CODEX_CLI: [AgentType.CLAUDE_CODE, AgentType.OPENCLAW],
+            AgentType.OPENCLAW: [AgentType.CLAUDE_CODE, AgentType.CODEX_CLI],
+        }
+        if not config or "fallback_order" not in config:
+            return default
+        result = {}
+        for key, candidates in config["fallback_order"].items():
+            try:
+                agent = AgentType(key)
+                result[agent] = [AgentType(c) for c in candidates]
+            except ValueError:
+                continue
+        # Fill in any missing agents with defaults
+        for agent in AgentType:
+            if agent not in result:
+                result[agent] = default.get(agent, [])
+        return result
 
     async def check_available(self, force: bool = False) -> set[AgentType]:
         """Check which agents are online. Cached for 30s."""
         now = time.monotonic()
-        if not force and self._health_cache and (now - self._health_ts) < 30:
+        if not force and self._health_cache and (now - self._health_ts) < self._health_ttl:
             return {a for a, ok in self._health_cache.items() if ok}
         checks = await asyncio.gather(
             *[self._check_one(at, ad) for at, ad in self.adapters.items()],
@@ -54,7 +74,7 @@ class Scheduler:
             return False
 
     def _pick_fallback(self, target: AgentType, available: set[AgentType]) -> AgentType | None:
-        for candidate in FALLBACK_MAP.get(target, []):
+        for candidate in self._fallback_map.get(target, []):
             if candidate in available:
                 return candidate
         return None
@@ -71,7 +91,7 @@ class Scheduler:
             )
 
         adapter = self.adapters[actual]
-        context = self.context_builder.build() if self.context_builder else ""
+        context = self.context_builder.build(prompt=prompt) if self.context_builder else ""
         start = time.monotonic()
         result = await adapter.execute(prompt, context, timeout)
         result.agent = actual
@@ -80,6 +100,10 @@ class Scheduler:
             result.output = note + result.output
         log_result(result, prompt)
         record_memory(result, prompt, self.project)
+        # Validate AFTER memory recording so warnings don't pollute memory
+        vr = validate_output(result, prompt)
+        if vr.warnings:
+            result.output += "\n\n[validator] " + "; ".join(vr.warnings)
         return result
 
     async def run_pipeline(self, pipeline: Pipeline) -> list[AgentResult]:
@@ -168,12 +192,16 @@ class Scheduler:
         adapter = self.adapters[actual]
         task.status = TaskStatus.RUNNING
 
-        context = self.context_builder.build() if self.context_builder else ""
+        context = self.context_builder.build(prompt=task.prompt, level="full") if self.context_builder else ""
         if task.depends_on:
             handoff = []
             for dep_id in task.depends_on:
                 dep_result = completed[dep_id]
-                handoff.append(f"<upstream task={dep_id}>\n{dep_result.output}\n</upstream>")
+                handoff.append(
+                    f"<upstream task={dep_id}>\n"
+                    f"{_summarize_upstream(dep_result.output)}\n"
+                    f"</upstream>"
+                )
             context += "\n\n" + "\n".join(handoff)
 
         start = time.monotonic()
@@ -183,9 +211,12 @@ class Scheduler:
         result.duration = time.monotonic() - start
         if note:
             result.output = note + result.output
-        task.status = TaskStatus.DONE
+        task.status = TaskStatus.DONE if result.exit_code == 0 else TaskStatus.FAILED
         log_result(result, task.prompt)
         record_memory(result, task.prompt, self.project)
+        vr = validate_output(result, task.prompt)
+        if vr.warnings:
+            result.output += "\n\n[validator] " + "; ".join(vr.warnings)
         return result
 
     def _resolve_agent(self, target: AgentType,
@@ -200,3 +231,43 @@ class Scheduler:
             pick = next(iter(available))
             return pick, f"[{target.value} unavailable, using {pick.value}]\n"
         return None, ""
+
+
+# Max chars for upstream output passed to downstream tasks
+_UPSTREAM_MAX_CHARS = 3000
+
+
+def _summarize_upstream(output: str) -> str:
+    """Truncate/summarize upstream output for downstream context injection."""
+    # Strip validator warnings before passing downstream
+    if "\n\n[validator]" in output:
+        output = output[:output.index("\n\n[validator]")]
+    if len(output) <= _UPSTREAM_MAX_CHARS:
+        return output
+    # Keep first chunk (usually the most important) + last chunk (conclusion)
+    head_size = _UPSTREAM_MAX_CHARS * 2 // 3
+    tail_size = _UPSTREAM_MAX_CHARS // 3
+    head = output[:head_size]
+    # Prefer cutting at code fence or blank line boundary
+    for boundary in ("\n```\n", "\n\n"):
+        idx = head.rfind(boundary)
+        if idx > head_size // 2:
+            head = head[:idx + len(boundary)]
+            break
+    else:
+        nl = head.rfind("\n")
+        if nl > head_size // 2:
+            head = head[:nl]
+    tail = output[-tail_size:]
+    # Start tail at a clean boundary
+    for boundary in ("\n```", "\n\n"):
+        idx = tail.find(boundary)
+        if 0 < idx < tail_size // 3:
+            tail = tail[idx:]
+            break
+    else:
+        nl = tail.find("\n")
+        if nl > 0:
+            tail = tail[nl + 1:]
+    omitted = len(output) - len(head) - len(tail)
+    return f"{head}\n\n[...{omitted} chars omitted...]\n\n{tail}"

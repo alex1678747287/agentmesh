@@ -67,19 +67,45 @@ class ContextBuilder:
             self._warm = _truncate_to_tokens(raw, self.max_warm)
         return self._warm or ""
 
-    def build(self) -> str:
-        """Assemble full context string with token budget."""
+    def build(self, prompt: str = "", level: str = "auto") -> str:
+        """Assemble context string with token budget.
+
+        Levels:
+          - "hot":  profile + rules only (~200 tokens). For small tasks.
+          - "warm": hot + project context + relevant memory. For normal tasks.
+          - "full": hot + warm + more memory entries. For pipeline tasks.
+          - "auto": pick level based on prompt length heuristic.
+        """
+        if level == "auto":
+            level = self._auto_level(prompt)
+
         parts = []
         if self.hot:
             parts.append(self.hot)
-        if self.warm:
+
+        if level in ("warm", "full") and self.warm:
             parts.append(f"# Project: {self.project}\n{self.warm}")
-        mem = build_memory_context(10)
-        if mem:
-            parts.append(_truncate_to_tokens(mem, self.max_memory))
+
+        if level in ("warm", "full"):
+            mem_count = 15 if level == "full" else 8
+            mem = build_memory_context(mem_count, prompt=prompt)
+            if mem:
+                parts.append(_truncate_to_tokens(mem, self.max_memory))
 
         full = "\n\n---\n\n".join(parts)
         return _truncate_to_tokens(full, self.max_total)
+
+    def _auto_level(self, prompt: str) -> str:
+        """Pick context level based on prompt characteristics."""
+        if not prompt:
+            return "warm"
+        # Short prompts (< 50 chars) = likely simple task
+        if len(prompt) < 50:
+            return "hot"
+        # Pipeline-related keywords
+        if any(kw in prompt.lower() for kw in ("pipeline", "multi", "batch", "all")):
+            return "full"
+        return "warm"
 
     def invalidate(self):
         """Clear cached context."""

@@ -6,17 +6,26 @@ agents:
     enabled: true
     timeout: 300
     max_turns: 10
+    max_retries: 2        # retry on transient failures
+    retry_delay: 3        # seconds between retries (multiplied by attempt)
+    deep_health_check: false  # set true to verify API key with dry-run
     # allowed_tools: [Read, Write, Edit, Bash, Grep, Glob]
 
   codex_cli:
     enabled: true
     timeout: 300
     approval_mode: auto-edit
+    max_retries: 2
+    retry_delay: 3
+    deep_health_check: false
 
   openclaw:
     enabled: true
     timeout: 300
     gateway_url: ws://localhost:19888
+    max_retries: 2
+    retry_delay: 3
+    deep_health_check: false
 
 context:
   ai_dir: .ai
@@ -31,3 +40,17 @@ router:
     analyze: openclaw
     test: codex_cli
     deploy: openclaw
+
+# Customizable fallback order per agent
+fallback_order:
+  claude_code: [openclaw, codex_cli]
+  codex_cli: [claude_code, openclaw]
+  openclaw: [claude_code, codex_cli]
+
+# Per-project overrides: create .ai/projects/<name>/agentmesh.yaml
+# Example for a project with longer timeouts:
+#   agents:
+#     claude_code:
+#       timeout: 600
+#   fallback_order:
+#     claude_code: [codex_cli]
