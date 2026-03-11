@@ -14,3 +14,4 @@ venv/
 .ruff_cache/
 *.log
 .ai/projects/
+.ai/logs/
