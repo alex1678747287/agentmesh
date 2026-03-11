@@ -1,0 +1,16 @@
+# Example pipeline: analyze -> implement -> review
+name: feature-pipeline
+tasks:
+  - id: analyze
+    prompt: "Analyze the current project structure and suggest improvements"
+    agent: openclaw
+
+  - id: implement
+    prompt: "Implement the suggested improvements"
+    agent: claude_code
+    depends_on: [analyze]
+
+  - id: review
+    prompt: "Review the implementation for code quality and security"
+    agent: codex_cli
+    depends_on: [implement]

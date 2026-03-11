@@ -43,8 +43,9 @@ def main(ctx, config):
 @click.argument("prompt")
 @click.option("--agent", "-a", type=click.Choice(["claude_code", "codex_cli", "openclaw"]))
 @click.option("--project", "-p", default=None, help="Project name for warm context")
+@click.option("--explain", "-e", is_flag=True, help="Show routing decision")
 @click.pass_context
-def run(ctx, prompt, agent, project):
+def run(ctx, prompt, agent, project, explain):
     """Run a task on an agent."""
     config = ctx.obj["config"]
     adapters = get_all_adapters(config)
@@ -56,6 +57,8 @@ def run(ctx, prompt, agent, project):
     scheduler = Scheduler(adapters, context_builder)
 
     target = router.route(prompt, explicit_agent=agent)
+    if explain:
+        console.print(f"[dim]{router.explain(prompt)}[/dim]")
     console.print(f"[dim]Routing to {target.value}...[/dim]")
 
     result = asyncio.run(scheduler.run_single(prompt, target))
@@ -66,6 +69,155 @@ def run(ctx, prompt, agent, project):
         console.print(f"[red]Agent failed (exit={result.exit_code})[/red]")
         console.print(result.output)
     console.print(f"[dim]Duration: {result.duration:.1f}s[/dim]")
+
+
+@main.command()
+@click.argument("pipeline_file", type=click.Path(exists=True))
+@click.option("--project", "-p", default=None, help="Project name for warm context")
+@click.pass_context
+def pipeline(ctx, pipeline_file, project):
+    """Execute a pipeline from a YAML file."""
+    from agentmesh.pipeline import load_pipeline
+
+    config = ctx.obj["config"]
+    adapters = get_all_adapters(config)
+    context_builder = ContextBuilder(
+        ai_dir=config["context"]["ai_dir"],
+        project=project,
+    )
+    scheduler = Scheduler(adapters, context_builder)
+    pipe = load_pipeline(pipeline_file)
+
+    console.print(f"[bold]Pipeline: {pipe.name}[/bold]")
+    console.print(f"[dim]Tasks: {len(pipe.tasks)}[/dim]")
+
+    results = asyncio.run(scheduler.run_pipeline(pipe))
+
+    table = Table(title="Pipeline Results")
+    table.add_column("Task", style="cyan")
+    table.add_column("Agent")
+    table.add_column("Exit")
+    table.add_column("Duration")
+    table.add_column("Output", max_width=60)
+
+    for task, result in zip(pipe.tasks, results):
+        exit_style = "green" if result.exit_code == 0 else "red"
+        table.add_row(
+            task.id,
+            result.agent.value,
+            f"[{exit_style}]{result.exit_code}[/{exit_style}]",
+            f"{result.duration:.1f}s",
+            result.output[:60].replace("\n", " "),
+        )
+    console.print(table)
+
+
+@main.command()
+@click.option("--agent", "-a", default=None, help="Lock to a specific agent")
+@click.option("--project", "-p", default=None, help="Project name for warm context")
+@click.pass_context
+def chat(ctx, agent, project):
+    """Interactive chat mode (REPL).
+
+    Commands inside chat:
+      /agent <name>   - switch agent (claude_code, codex_cli, openclaw)
+      /auto            - switch back to auto-routing
+      /status          - show agent health
+      /history         - show session history
+      /pipeline <file> - run a pipeline file
+      /exit            - quit
+    """
+    config = ctx.obj["config"]
+    adapters = get_all_adapters(config)
+    context_builder = ContextBuilder(
+        ai_dir=config["context"]["ai_dir"],
+        project=project,
+    )
+    router = Router(config.get("router", {}))
+    scheduler = Scheduler(adapters, context_builder)
+
+    locked_agent = agent
+    history: list[tuple[str, str, str]] = []  # (agent, prompt, output_preview)
+
+    console.print("[bold]agentmesh chat[/bold] - type /exit to quit")
+    if locked_agent:
+        console.print(f"[dim]Locked to: {locked_agent}[/dim]")
+    else:
+        console.print("[dim]Auto-routing enabled[/dim]")
+
+    while True:
+        try:
+            prompt = console.input("[bold cyan]> [/bold cyan]").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if not prompt:
+            continue
+
+        # Handle slash commands
+        if prompt.startswith("/"):
+            if _handle_chat_cmd(prompt, adapters, history, console, locked_agent) == "exit":
+                break
+            if prompt.startswith("/agent "):
+                locked_agent = prompt.split(None, 1)[1].strip()
+                console.print(f"[dim]Switched to: {locked_agent}[/dim]")
+            elif prompt == "/auto":
+                locked_agent = None
+                console.print("[dim]Auto-routing enabled[/dim]")
+            continue
+
+        target = router.route(prompt, explicit_agent=locked_agent)
+        console.print(f"[dim]-> {target.value}[/dim]")
+
+        try:
+            result = asyncio.run(scheduler.run_single(prompt, target))
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            continue
+
+        if result.exit_code == 0:
+            console.print(result.output)
+        else:
+            console.print(f"[red]Failed (exit={result.exit_code})[/red]")
+            console.print(result.output)
+        console.print(f"[dim]{result.duration:.1f}s[/dim]")
+
+        history.append((target.value, prompt, result.output[:100]))
+
+    console.print("[dim]Bye[/dim]")
+
+
+def _handle_chat_cmd(cmd, adapters, history, con, locked_agent) -> str | None:
+    """Handle chat slash commands. Returns 'exit' to quit."""
+    if cmd in ("/exit", "/quit", "/q"):
+        return "exit"
+
+    if cmd == "/status":
+        async def _check():
+            for at, ad in adapters.items():
+                ok = await ad.health_check()
+                s = "[green]OK[/green]" if ok else "[red]DOWN[/red]"
+                con.print(f"  {at.value}: {s}")
+        asyncio.run(_check())
+        return None
+
+    if cmd == "/history":
+        if not history:
+            con.print("[dim]No history yet[/dim]")
+        else:
+            for i, (ag, pr, out) in enumerate(history, 1):
+                con.print(f"  {i}. [{ag}] {pr[:50]} -> {out[:40]}")
+        return None
+
+    if cmd.startswith("/pipeline "):
+        filepath = cmd.split(None, 1)[1].strip()
+        con.print(f"[dim]Use: agentmesh pipeline {filepath}[/dim]")
+        return None
+
+    if not cmd.startswith("/agent ") and cmd != "/auto":
+        con.print(f"[dim]Unknown command: {cmd}[/dim]")
+
+    return None
 
 
 @main.command()
@@ -98,13 +250,11 @@ def init(ctx, project):
     ai_dir.mkdir(exist_ok=True)
     (ai_dir / "projects").mkdir(exist_ok=True)
 
-    # Create profile.md if not exists
     profile = ai_dir / "profile.md"
     if not profile.exists():
         profile.write_text("# Profile\n\n- Language: zh-CN\n- Stack: Go, Python\n", "utf-8")
         console.print(f"Created {profile}")
 
-    # Create rules.md if not exists
     rules = ai_dir / "rules.md"
     if not rules.exists():
         rules.write_text("# Rules\n\n- Code comments in English\n- Keep it simple\n", "utf-8")
@@ -152,7 +302,7 @@ def log(ctx, days, agent):
     table.add_column("Exit")
     table.add_column("Prompt", max_width=40)
 
-    for e in entries[-20:]:  # show last 20
+    for e in entries[-20:]:
         exit_style = "green" if e["exit_code"] == 0 else "red"
         table.add_row(
             e["ts"][:19],
