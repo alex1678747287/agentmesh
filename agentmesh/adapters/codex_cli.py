@@ -14,8 +14,7 @@ class CodexCLIAdapter(BaseAdapter):
 
     async def _execute(self, prompt: str, context: str = "", timeout: int = 300) -> AgentResult:
         full_prompt = self.build_prompt(prompt, context)
-        approval = self.config.get("approval_mode", "auto-edit")
-        cmd = ["codex", "exec", full_prompt, "--approval-mode", approval]
+        cmd = ["codex", "exec", full_prompt, "--full-auto"]
 
         start = time.monotonic()
         proc = await asyncio.create_subprocess_exec(

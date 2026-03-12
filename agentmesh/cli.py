@@ -13,6 +13,8 @@ from rich.table import Table
 from agentmesh.adapters import get_all_adapters
 from agentmesh.config import load_config
 from agentmesh.context import ContextBuilder
+from agentmesh.logger import set_ai_dir as set_log_dir
+from agentmesh.memory import set_ai_dir as set_mem_dir
 from agentmesh.models import AgentType
 from agentmesh.router import Router
 from agentmesh.scheduler import Scheduler
@@ -21,7 +23,7 @@ console = Console()
 
 
 def _find_config() -> Path | None:
-    """Search for config.yaml in cwd and parents."""
+    """Search for config file in cwd."""
     for name in ("agentmesh.yaml", "agentmesh.yml", "config.yaml"):
         p = Path.cwd() / name
         if p.exists():
@@ -36,7 +38,11 @@ def main(ctx, config):
     """agentmesh - Multi AI agent collaboration hub."""
     ctx.ensure_object(dict)
     config_path = config or _find_config()
-    ctx.obj["config"] = load_config(config_path)
+    cfg = load_config(config_path)
+    ai_dir = cfg["context"]["ai_dir"]
+    set_mem_dir(ai_dir)
+    set_log_dir(ai_dir)
+    ctx.obj["config"] = cfg
 
 
 @main.command()
@@ -203,8 +209,13 @@ def chat(ctx, agent, project):
             if _handle_chat_cmd(prompt, adapters, history, console, locked_agent) == "exit":
                 break
             if prompt.startswith("/agent "):
-                locked_agent = prompt.split(None, 1)[1].strip()
-                console.print(f"[dim]Switched to: {locked_agent}[/dim]")
+                agent_name = prompt.split(None, 1)[1].strip()
+                valid_agents = {a.value for a in AgentType}
+                if agent_name not in valid_agents:
+                    console.print(f"[red]Unknown agent: {agent_name}. Valid: {', '.join(valid_agents)}[/red]")
+                else:
+                    locked_agent = agent_name
+                    console.print(f"[dim]Switched to: {locked_agent}[/dim]")
             elif prompt == "/auto":
                 locked_agent = None
                 console.print("[dim]Auto-routing enabled[/dim]")

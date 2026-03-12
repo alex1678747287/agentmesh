@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agentmesh.models import AgentResult
 
-LOG_DIR = Path(".ai/logs")
+_DEFAULT_LOG_DIR = Path(".ai/logs")
+_log_dir: Path = _DEFAULT_LOG_DIR
+
+
+def set_ai_dir(ai_dir: str | Path):
+    """Override the log directory based on ai_dir config."""
+    global _log_dir
+    _log_dir = Path(ai_dir) / "logs"
 
 
 def log_result(result: AgentResult, prompt: str = ""):
     """Append an execution record to the log file."""
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _log_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    log_file = LOG_DIR / f"{today}.jsonl"
+    log_file = _log_dir / f"{today}.jsonl"
 
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -33,15 +40,27 @@ def log_result(result: AgentResult, prompt: str = ""):
 
 
 def read_logs(days: int = 7, agent: str | None = None) -> list[dict]:
-    """Read recent log entries."""
-    if not LOG_DIR.exists():
+    """Read log entries from the last N days."""
+    if not _log_dir.exists():
         return []
 
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff_str = cutoff.strftime("%Y-%m-%d")
+
     entries = []
-    for log_file in sorted(LOG_DIR.glob("*.jsonl"), reverse=True)[:days]:
+    for log_file in sorted(_log_dir.glob("*.jsonl"), reverse=True):
+        # File name is YYYY-MM-DD.jsonl, skip files older than cutoff
+        if log_file.stem < cutoff_str:
+            break
         with open(log_file, encoding="utf-8") as f:
             for line in f:
-                entry = json.loads(line.strip())
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 if agent and entry.get("agent") != agent:
                     continue
                 entries.append(entry)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from abc import ABC, abstractmethod
 
 from agentmesh.models import AgentResult, AgentType
@@ -105,8 +106,6 @@ def _ensure_registered():
         return
     from agentmesh.adapters import claude_code, codex_cli, openclaw  # noqa: F401
 
-
-import re
 
 # Patterns that indicate prompt injection attempts
 _INJECTION_PATTERNS = [

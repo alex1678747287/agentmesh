@@ -28,7 +28,6 @@ DEFAULT_CONFIG = {
             "command": "codex",
             "args": ["exec", "{prompt}"],
             "timeout": 300,
-            "approval_mode": "auto-edit",
             "max_retries": 2,
             "retry_delay": 3,
             "deep_health_check": False,
@@ -79,27 +78,48 @@ def load_config(path: str | Path | None = None, project: str | None = None) -> d
                 user_config = yaml.safe_load(f) or {}
             config = _deep_merge(config, user_config)
 
-    # Per-project override
+    # Per-project override: check both <project>.yaml and <project>/agentmesh.yaml
     if project:
         ai_dir = config.get("context", {}).get("ai_dir", ".ai")
-        project_config_path = Path(ai_dir) / "projects" / project / "agentmesh.yaml"
-        if project_config_path.exists():
-            with open(project_config_path, encoding="utf-8") as f:
-                proj_config = yaml.safe_load(f) or {}
-            config = _deep_merge(config, proj_config)
+        proj_dir = Path(ai_dir) / "projects"
+        # Prefer <project>.yaml (flat), fallback to <project>/agentmesh.yaml (nested)
+        candidates = [
+            proj_dir / f"{project}.yaml",
+            proj_dir / project / "agentmesh.yaml",
+        ]
+        for project_config_path in candidates:
+            if project_config_path.exists():
+                with open(project_config_path, encoding="utf-8") as f:
+                    proj_config = yaml.safe_load(f) or {}
+                config = _deep_merge(config, proj_config)
+                break
 
     return config
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
     """Recursively merge override into base."""
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
+    result = {}
+    for key, value in base.items():
+        if isinstance(value, dict):
+            result[key] = _deep_merge(value, override.get(key, {})) if key in override and isinstance(override.get(key), dict) else _deep_copy_value(value)
         else:
-            result[key] = value
+            result[key] = _deep_copy_value(value)
+    for key, value in override.items():
+        if key not in base:
+            result[key] = _deep_copy_value(value)
+        elif not isinstance(base[key], dict) or not isinstance(value, dict):
+            result[key] = _deep_copy_value(value)
     return result
+
+
+def _deep_copy_value(v):
+    """Deep copy a single value."""
+    if isinstance(v, dict):
+        return _deep_copy(v)
+    elif isinstance(v, list):
+        return [_deep_copy_value(i) for i in v]
+    return v
 
 
 def _deep_copy(d: dict) -> dict:

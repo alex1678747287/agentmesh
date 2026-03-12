@@ -7,11 +7,6 @@ from pathlib import Path
 from agentmesh.memory import build_memory_context
 
 
-def _estimate_tokens(text: str) -> int:
-    """Rough token estimate: ~4 chars per token for mixed EN/CN."""
-    return len(text) // 3
-
-
 def _truncate_to_tokens(text: str, max_tokens: int) -> str:
     """Truncate text to approximate token limit."""
     max_chars = max_tokens * 3

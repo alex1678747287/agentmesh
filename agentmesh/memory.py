@@ -17,8 +17,11 @@ from pathlib import Path
 
 from agentmesh.models import AgentResult
 
-MEMORY_FILE = Path(".ai/memory.jsonl")
+_DEFAULT__memory_file = Path(".ai/memory.jsonl")
 MAX_ENTRIES = 200
+
+# Active memory file path (can be overridden via set_ai_dir)
+_memory_file: Path = _DEFAULT__memory_file
 
 # TTL per kind (days). Entries older than this are expired during cleanup.
 _TTL_DAYS: dict[str, int] = {
@@ -36,6 +39,14 @@ _DEFAULT_TTL_DAYS = 7
 # In-memory cache for recent entries (avoids full file scan)
 _cache: deque[dict] | None = None
 _cache_mtime: float = 0
+
+
+def set_ai_dir(ai_dir: str | Path):
+    """Override the memory file path based on ai_dir config."""
+    global _memory_file, _cache, _cache_mtime
+    _memory_file = Path(ai_dir) / "memory.jsonl"
+    _cache = None
+    _cache_mtime = 0
 
 # Patterns to extract key info from agent output
 _EXTRACTORS: list[tuple[str, list[str], re.Pattern]] = [
@@ -73,14 +84,14 @@ _EXTRACTORS: list[tuple[str, list[str], re.Pattern]] = [
 def _get_cache() -> deque[dict]:
     """Load entries into cache, refreshing if file changed."""
     global _cache, _cache_mtime
-    if not MEMORY_FILE.exists():
+    if not _memory_file.exists():
         _cache = deque(maxlen=MAX_ENTRIES)
         return _cache
-    mtime = MEMORY_FILE.stat().st_mtime
+    mtime = _memory_file.stat().st_mtime
     if _cache is not None and mtime == _cache_mtime:
         return _cache
     _cache = deque(maxlen=MAX_ENTRIES)
-    with open(MEMORY_FILE, encoding="utf-8") as f:
+    with open(_memory_file, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -101,7 +112,7 @@ def record_memory(result: AgentResult, prompt: str = "", project: str | None = N
     if not entries:
         return
 
-    MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _memory_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Deduplicate against recent entries
     cache = _get_cache()
@@ -110,13 +121,13 @@ def record_memory(result: AgentResult, prompt: str = "", project: str | None = N
     if not new_entries:
         return
 
-    with open(MEMORY_FILE, "a", encoding="utf-8") as f:
+    with open(_memory_file, "a", encoding="utf-8") as f:
         for entry in new_entries:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
             cache.append(entry)
 
     global _cache_mtime
-    _cache_mtime = MEMORY_FILE.stat().st_mtime
+    _cache_mtime = _memory_file.stat().st_mtime
     _cleanup_expired()
 
 
@@ -209,7 +220,7 @@ def _is_expired(entry: dict) -> bool:
 def _cleanup_expired():
     """Remove expired entries and enforce MAX_ENTRIES."""
     global _cache, _cache_mtime
-    if not MEMORY_FILE.exists():
+    if not _memory_file.exists():
         return
     cache = _get_cache()
     kept = [e for e in cache if not _is_expired(e)]
@@ -217,12 +228,12 @@ def _cleanup_expired():
         kept = kept[-MAX_ENTRIES:]
     # Only rewrite if something was removed
     if len(kept) < len(cache):
-        MEMORY_FILE.write_text(
+        _memory_file.write_text(
             "\n".join(json.dumps(e, ensure_ascii=False) for e in kept) + "\n",
             encoding="utf-8",
         )
         _cache = deque(kept, maxlen=MAX_ENTRIES)
-        _cache_mtime = MEMORY_FILE.stat().st_mtime
+        _cache_mtime = _memory_file.stat().st_mtime
 
 
 def _extract_entries(prompt: str, output: str, agent: str,

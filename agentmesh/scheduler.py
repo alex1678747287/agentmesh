@@ -28,6 +28,7 @@ class Scheduler:
         self._health_cache: dict[AgentType, bool] = {}
         self._health_ts: float = 0
         self._health_ttl = health_cache_ttl
+        self._config = config or {}
         # Load fallback order from config, with sensible defaults
         self._fallback_map = self._build_fallback_map(config)
 
@@ -51,6 +52,11 @@ class Scheduler:
             if agent not in result:
                 result[agent] = default.get(agent, [])
         return result
+
+    def _get_timeout(self, agent: AgentType) -> int:
+        """Get timeout for an agent from config."""
+        agents_cfg = self._config.get("agents", {})
+        return agents_cfg.get(agent.value, {}).get("timeout", 300)
 
     async def check_available(self, force: bool = False) -> set[AgentType]:
         """Check which agents are online. Cached for 30s."""
@@ -80,8 +86,10 @@ class Scheduler:
         return None
 
     async def run_single(self, prompt: str, agent: AgentType,
-                         timeout: int = 300) -> AgentResult:
+                         timeout: int | None = None) -> AgentResult:
         """Run a single task. Falls back to another agent if target is down."""
+        if timeout is None:
+            timeout = self._get_timeout(agent)
         available = await self.check_available()
         actual, note = self._resolve_agent(agent, available)
         if actual is None:
@@ -121,18 +129,21 @@ class Scheduler:
             if not ready:
                 raise RuntimeError("Deadlock: unresolvable task dependencies")
 
+            # Phase 1: skip tasks whose conditions are not met
+            to_skip = []
             for task in ready:
-                # Check condition before running
                 if task.condition and not self._check_condition(task, completed):
                     task.status = TaskStatus.DONE
                     task.result = AgentResult(
                         agent=task.agent, task_id=task.id,
-                        output=f"[skipped: condition not met]",
+                        output="[skipped: condition not met]",
                         exit_code=0, duration=0,
                     )
                     completed[task.id] = task.result
                     skipped.add(task.id)
-                    del pending[task.id]
+                    to_skip.append(task.id)
+            for tid in to_skip:
+                del pending[tid]
 
             # Re-filter after condition checks
             ready = [
@@ -158,7 +169,8 @@ class Scheduler:
                 else:
                     task.result = result
                 completed[task.id] = task.result
-                del pending[task.id]
+            for task in ready:
+                pending.pop(task.id, None)
 
         return [t.result for t in pipeline.tasks if t.result]
 
